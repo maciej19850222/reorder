@@ -23,10 +23,10 @@
   "keywords": [
     "medusa",
     "plugin",
-    "medusa-plugin",
-    "medusa-plugin-integration",
     "medusa-plugin-other",
-    "medusa-v2"
+    "medusa-plugin",
+    "medusa-v2",
+    "medusa-plugin-integration"
   ],
   "scripts": {
     "build": "medusa plugin:build",
