@@ -68,8 +68,8 @@ const metricTabs: Array<{
   { key: AnalyticsMetricKey.CHURN_RATE, label: "Churn" },
   { key: AnalyticsMetricKey.LTV, label: "LTV" },
   {
-    key: AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT,
-    label: "Active",
+    key: AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT,
+    label: "Created",
   },
 ]
 
@@ -108,6 +108,8 @@ const AnalyticsPage = () => {
   const { data: productsData } = useAdminAnalyticsProductsQuery()
 
   const selectedProductId = filters.product_id[0] ?? "__all"
+  const isCreatedMetric =
+    selectedMetric === AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT
   const selectedSeries = useMemo(() => {
     const series = trendsData?.series ?? []
 
@@ -134,11 +136,23 @@ const AnalyticsPage = () => {
       (item) => item.key !== AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT && item.value !== null
     )
     const hasTrendPoints = (trendsData?.series ?? []).some((series) =>
+      series.metric !== AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT &&
       series.points.some((point) => point.value !== null)
     )
 
     return Boolean(countMetric?.value && countMetric.value > 0) || hasNonCountMetric || hasTrendPoints
   }, [kpisData?.kpis, trendsData?.series])
+  const hasSelectedSeriesData = useMemo(() => {
+    if (!selectedSeries) {
+      return false
+    }
+
+    if (selectedSeries.metric === AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT) {
+      return selectedSeries.points.length > 0
+    }
+
+    return selectedSeries.points.some((point) => point.value !== null)
+  }, [selectedSeries])
 
   const pageError = isKpisError ? kpisError : isTrendsError ? trendsError : null
 
@@ -148,8 +162,8 @@ const AnalyticsPage = () => {
         <div className="flex flex-col">
           <Heading level="h1">Analytics</Heading>
           <Text size="small" leading="compact" className="text-ui-fg-subtle">
-            Review recurring revenue, churn, and active subscription trends from
-            the analytics snapshot model.
+            Review recurring revenue, churn, LTV, and subscription creation
+            trends from the analytics read model.
           </Text>
         </div>
         <div className="flex items-center gap-2">
@@ -238,7 +252,7 @@ const AnalyticsPage = () => {
               />
             )
           })}
-          {filters.group_by !== AnalyticsGroupBy.DAY ? (
+          {filters.group_by !== AnalyticsGroupBy.DAY && !isCreatedMetric ? (
             <FilterChip
               label="Group by"
               value={formatGroupBy(filters.group_by)}
@@ -376,6 +390,7 @@ const AnalyticsPage = () => {
             </Text>
             <Select
               value={filters.group_by}
+              disabled={isCreatedMetric}
               onValueChange={(value) => {
                 setFilters((current) => ({
                   ...current,
@@ -392,6 +407,11 @@ const AnalyticsPage = () => {
                 <Select.Item value={AnalyticsGroupBy.MONTH}>Month</Select.Item>
               </Select.Content>
             </Select>
+            {isCreatedMetric ? (
+              <Text size="small" leading="compact" className="text-ui-fg-subtle">
+                Created always renders one UTC bar per day.
+              </Text>
+            ) : null}
           </div>
         </div>
       </div>
@@ -423,12 +443,15 @@ const AnalyticsPage = () => {
                   leading="compact"
                   className="text-ui-fg-subtle"
                 >
-                  Trends are bucketed in UTC and follow the same filters as the
-                  KPI cards.
+                  {isCreatedMetric
+                    ? "Created uses one UTC bar per day and only follows the selected date range."
+                    : "Trends are bucketed in UTC and follow the same filters as the KPI cards."}
                 </Text>
               </div>
               <Text size="small" leading="compact" className="text-ui-fg-subtle">
-                {formatGroupBy(filters.group_by)} buckets
+                {isCreatedMetric
+                  ? "Daily bars"
+                  : `${formatGroupBy(filters.group_by)} buckets`}
               </Text>
             </div>
 
@@ -450,13 +473,19 @@ const AnalyticsPage = () => {
 
             {isTrendsLoading && !trendsData ? (
               <TrendChartSkeleton />
-            ) : !hasAnalyticsData || !selectedSeries ? (
+            ) : !selectedSeries || !hasSelectedSeriesData || (!hasAnalyticsData && !isCreatedMetric) ? (
               <EmptyAnalyticsState
                 title="No analytics data for this range"
                 description="Try widening the date range or removing filters to inspect a broader slice of subscription activity."
               />
             ) : (
-              <TrendChart series={selectedSeries} />
+              <>
+                {isCreatedMetric ? (
+                  <CreatedSubscriptionsBarChart series={selectedSeries} />
+                ) : (
+                  <TrendChart series={selectedSeries} />
+                )}
+              </>
             )}
           </div>
         </Container>
@@ -696,6 +725,189 @@ const TrendChart = ({ series }: { series: AnalyticsTrendSeries }) => {
             />
           ))}
         </svg>
+      </div>
+      <div className="grid gap-2 md:grid-cols-3">
+        {referencePoints.map((point) => (
+          <div
+            key={`${point.bucket_start}-${point.bucket_end}`}
+            className="rounded-md border border-ui-border-base px-3 py-2"
+          >
+            <Text size="small" leading="compact" weight="plus">
+              {formatDateLabel(point.bucket_start)}
+            </Text>
+            <Text size="small" leading="compact" className="text-ui-fg-subtle">
+              {formatTrendValue(point.value, series)}
+            </Text>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const CreatedSubscriptionsBarChart = ({
+  series,
+}: {
+  series: AnalyticsTrendSeries
+}) => {
+  const [hoveredPoint, setHoveredPoint] = useState<{
+    bucket_start: string
+    value: number
+    cursor_x: number
+    cursor_y: number
+  } | null>(null)
+  const numericPoints = series.points.map((point, index) => ({
+    index,
+    value: typeof point.value === "number" ? point.value : 0,
+    bucket_start: point.bucket_start,
+    bucket_end: point.bucket_end,
+  }))
+
+  if (!numericPoints.length) {
+    return (
+      <EmptyAnalyticsState
+        title="No daily buckets available"
+        description="Pick a valid date range to inspect daily subscription creation."
+      />
+    )
+  }
+
+  const width = 960
+  const height = 280
+  const padding = 24
+  const innerWidth = width - padding * 2
+  const chartHeight = height - padding * 2
+  const max = Math.max(...numericPoints.map((point) => point.value), 0)
+  const min = Math.min(...numericPoints.map((point) => point.value), 0)
+  const range = max || 1
+  const barWidth = Math.max(
+    6,
+    Math.min(24, innerWidth / Math.max(numericPoints.length, 1) - 4)
+  )
+  const step = innerWidth / Math.max(numericPoints.length, 1)
+  const referencePoints = [
+    numericPoints[0],
+    numericPoints[Math.floor(numericPoints.length / 2)],
+    numericPoints[numericPoints.length - 1],
+  ].filter(
+    (point, index, collection) =>
+      collection.findIndex(
+        (candidate) => candidate.bucket_start === point.bucket_start
+      ) === index
+  )
+
+  const bars = numericPoints.map((point, pointIndex) => {
+    const barHeight = point.value === 0 ? 2 : (point.value / range) * chartHeight
+    const x = padding + pointIndex * step + Math.max((step - barWidth) / 2, 0)
+    const y = height - padding - barHeight
+
+    return {
+      ...point,
+      x,
+      y,
+      barHeight,
+    }
+  })
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid gap-2 md:grid-cols-[1fr_auto] md:items-start">
+        <div className="flex flex-col">
+          <Text size="small" leading="compact" weight="plus">
+            {series.label}
+          </Text>
+          <Text size="small" leading="compact" className="text-ui-fg-subtle">
+            {formatSeriesRangeSummary(series)}
+          </Text>
+        </div>
+        <div className="flex flex-col items-start gap-1 md:items-end">
+          <Text size="small" leading="compact" className="text-ui-fg-subtle">
+            Max {formatTrendValue(max, series)}
+          </Text>
+          <Text size="small" leading="compact" className="text-ui-fg-subtle">
+            Min {formatTrendValue(min, series)}
+          </Text>
+        </div>
+      </div>
+      <div className="rounded-lg border border-ui-border-base bg-ui-bg-subtle px-3 py-3">
+        <div className="relative">
+          {hoveredPoint ? (
+            <div
+              className="pointer-events-none absolute top-2 z-10 rounded-md border border-ui-border-base bg-ui-bg-base px-3 py-2 shadow-elevation-card-rest"
+              style={{
+                left: `${hoveredPoint.cursor_x}px`,
+                top: `${Math.max(8, hoveredPoint.cursor_y - 12)}px`,
+                transform: "translate(-50%, -100%)",
+              }}
+            >
+              <Text size="small" leading="compact" weight="plus">
+                {formatDateLabel(hoveredPoint.bucket_start)}
+              </Text>
+              <Text size="small" leading="compact" className="text-ui-fg-subtle">
+                {formatTrendValue(hoveredPoint.value, series)}
+              </Text>
+            </div>
+          ) : null}
+          <svg
+            viewBox={`0 0 ${width} ${height}`}
+            role="img"
+            aria-label={`${series.label} bar chart`}
+            className="h-[280px] w-full"
+          >
+            <defs>
+              <linearGradient id="analytics-bar-gradient" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.95" />
+                <stop offset="100%" stopColor="#2563eb" stopOpacity="0.8" />
+              </linearGradient>
+            </defs>
+            <line
+              x1={padding}
+              y1={height - padding}
+              x2={width - padding}
+              y2={height - padding}
+              stroke="#d6d9df"
+              strokeWidth="1"
+            />
+            {bars.map((point) => (
+              <rect
+                key={`${point.bucket_start}-${point.index}`}
+                x={point.x}
+                y={point.y}
+                width={barWidth}
+                height={point.barHeight}
+                rx="3"
+                fill="url(#analytics-bar-gradient)"
+                onMouseEnter={(event) => {
+                  const svgRect = event.currentTarget.ownerSVGElement?.getBoundingClientRect()
+
+                  setHoveredPoint({
+                    bucket_start: point.bucket_start,
+                    value: point.value,
+                    cursor_x: svgRect ? event.clientX - svgRect.left : point.x,
+                    cursor_y: svgRect ? event.clientY - svgRect.top : point.y,
+                  })
+                }}
+                onMouseMove={(event) => {
+                  const svgRect = event.currentTarget.ownerSVGElement?.getBoundingClientRect()
+
+                  setHoveredPoint({
+                    bucket_start: point.bucket_start,
+                    value: point.value,
+                    cursor_x: svgRect ? event.clientX - svgRect.left : point.x,
+                    cursor_y: svgRect ? event.clientY - svgRect.top : point.y,
+                  })
+                }}
+                onMouseLeave={() => {
+                  setHoveredPoint((current) =>
+                    current?.bucket_start === point.bucket_start ? null : current
+                  )
+                }}
+              >
+                <title>{`${formatDateLabel(point.bucket_start)}: ${point.value} subscriptions created`}</title>
+              </rect>
+            ))}
+          </svg>
+        </div>
       </div>
       <div className="grid gap-2 md:grid-cols-3">
         {referencePoints.map((point) => (

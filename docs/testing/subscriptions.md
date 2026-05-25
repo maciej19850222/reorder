@@ -109,6 +109,7 @@ Covered at the module/service layer:
 Covered through integration tests:
 - list query behavior
 - detail query behavior
+- live customer and product enrichment with snapshot fallback for Admin reads
 - pause workflow
 - resume workflow
 - cancel workflow

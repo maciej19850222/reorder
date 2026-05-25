@@ -16,6 +16,7 @@ The `Analytics` Admin UI gives operators a reporting-oriented dashboard for recu
 It is intended to support:
 - quick KPI review
 - trend inspection over time
+- daily inspection of subscription creation volume
 - filtered reporting by status, product, and cadence
 - export of the currently visible reporting slice
 
@@ -68,6 +69,11 @@ Current runtime behavior:
 - `group_by` defaults to `day`
 - timezone semantics are fixed to `UTC` in MVP
 
+Implemented chart exception:
+- the `Created` trend tab only uses `date_from` and `date_to`
+- the `Created` trend ignores `status`, `product_id`, `frequency`, and `group_by`
+- the `group_by` control is disabled while `Created` is selected
+
 Frequency filters are represented as cadence tokens such as:
 - `week:1`
 - `month:1`
@@ -95,7 +101,9 @@ The page displays a simple trend visualization sourced from the analytics trends
 Current behavior:
 - the chart is driven by display queries loaded on mount
 - metric selection changes which series is emphasized
-- bucket semantics follow the selected `group_by`
+- `MRR`, `Churn`, and `LTV` follow the selected `group_by`
+- the `Created` tab renders a dedicated daily bar chart
+- the `Created` chart uses one UTC bar per day
 - `day`, `week`, and `month` buckets all use `UTC`
 
 The current UI intentionally keeps the chart lightweight and aligned with the existing Admin visual language.
@@ -151,6 +159,9 @@ The page shows a loading state while KPI and trend queries are in flight.
 The page shows an explicit empty state when the selected filters produce no analytics data.
 
 This is treated as a valid reporting outcome, not as an error.
+
+The `Created` tab is an exception:
+- it renders a daily bar chart for the requested range even when all returned values are `0`
 
 ### Error
 

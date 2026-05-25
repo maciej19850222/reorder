@@ -31,6 +31,15 @@ type SubscriptionMetricsDailyRecord = {
   metadata: Record<string, unknown> | null
 }
 
+type SubscriptionRecord = {
+  id: string
+  product_id: string
+  status: AnalyticsSubscriptionStatus
+  frequency_interval: "week" | "month" | "year"
+  frequency_value: number
+  created_at: string
+}
+
 type QueryGraphInput = {
   entity?: string
   fields?: string[]
@@ -68,13 +77,43 @@ function buildRow(
   }
 }
 
-function createContainer(rows: SubscriptionMetricsDailyRecord[]) {
+function createSubscription(
+  id: string,
+  overrides: Partial<SubscriptionRecord> = {}
+): SubscriptionRecord {
+  return {
+    id,
+    product_id: "prod_coffee",
+    status: "active",
+    frequency_interval: "month",
+    frequency_value: 1,
+    created_at: "2026-04-01T00:00:00.000Z",
+    ...overrides,
+  }
+}
+
+function createContainer(
+  rows: SubscriptionMetricsDailyRecord[],
+  subscriptions: SubscriptionRecord[] = []
+) {
   const graph = jest.fn(async (input: QueryGraphInput) => {
     const take = input.pagination?.take ?? 500
     const skip = input.pagination?.skip ?? 0
-    const filtered = rows
-      .filter((row) => matchesFilters(row, input.filters ?? {}))
-      .sort((left, right) => left.metric_date.localeCompare(right.metric_date))
+    const source =
+      input.entity === "subscription"
+        ? subscriptions
+            .filter((subscription) =>
+              matchesSubscriptionFilters(subscription, input.filters ?? {})
+            )
+            .sort((left, right) =>
+              left.created_at === right.created_at
+                ? left.id.localeCompare(right.id)
+                : left.created_at.localeCompare(right.created_at)
+            )
+        : rows
+            .filter((row) => matchesMetricsFilters(row, input.filters ?? {}))
+            .sort((left, right) => left.metric_date.localeCompare(right.metric_date))
+    const filtered = source
     const batch = filtered.slice(skip, skip + take)
 
     return {
@@ -111,7 +150,7 @@ function createContainer(rows: SubscriptionMetricsDailyRecord[]) {
   }
 }
 
-function matchesFilters(
+function matchesMetricsFilters(
   row: SubscriptionMetricsDailyRecord,
   filters: Record<string, unknown>
 ) {
@@ -142,7 +181,57 @@ function matchesFilters(
   return true
 }
 
+function matchesSubscriptionFilters(
+  row: SubscriptionRecord,
+  filters: Record<string, unknown>
+) {
+  const createdAtFilter = filters.created_at as
+    | { $gte?: string; $lte?: string }
+    | undefined
+
+  if (createdAtFilter?.$gte && row.created_at < createdAtFilter.$gte) {
+    return false
+  }
+
+  if (createdAtFilter?.$lte && row.created_at > createdAtFilter.$lte) {
+    return false
+  }
+
+  const statusFilter = filters.status as AnalyticsSubscriptionStatus[] | undefined
+
+  if (statusFilter?.length && !statusFilter.includes(row.status)) {
+    return false
+  }
+
+  const productFilter = filters.product_id as string[] | undefined
+
+  if (productFilter?.length && !productFilter.includes(row.product_id)) {
+    return false
+  }
+
+  const frequencyOrFilter = filters.$or as
+    | Array<{
+        frequency_interval?: SubscriptionRecord["frequency_interval"]
+        frequency_value?: number
+      }>
+    | undefined
+
+  if (frequencyOrFilter?.length) {
+    return frequencyOrFilter.some(
+      (frequency) =>
+        frequency.frequency_interval === row.frequency_interval &&
+        frequency.frequency_value === row.frequency_value
+    )
+  }
+
+  return true
+}
+
 describe("analytics admin-query read model", () => {
+  beforeEach(() => {
+    jest.useRealTimers()
+  })
+
   it("computes KPI summaries for recurring revenue, churn, ltv, and active subscriptions", async () => {
     const rows = [
       buildRow("current_day_one", {
@@ -299,6 +388,122 @@ describe("analytics admin-query read model", () => {
         value: 2,
       })
     )
+
+    expect(
+      dayResponse.series.find(
+        (series) => series.metric === AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT
+      )?.points
+    ).toHaveLength(31)
+  })
+
+  it("builds a daily created subscriptions series from subscription.created_at", async () => {
+    const subscriptions = [
+      createSubscription("sub_created_a", {
+        created_at: "2026-04-01T08:15:00.000Z",
+        product_id: "prod_target",
+        status: "cancelled",
+      }),
+      createSubscription("sub_created_b", {
+        created_at: "2026-04-01T14:45:00.000Z",
+        product_id: "prod_other",
+        status: "paused",
+      }),
+      createSubscription("sub_created_c", {
+        created_at: "2026-04-03T09:30:00.000Z",
+        frequency_interval: "year",
+        frequency_value: 1,
+      }),
+    ]
+    const { container } = createContainer([], subscriptions)
+
+    const response = await getAdminAnalyticsTrends(container, {
+      date_from: "2026-04-01T00:00:00.000Z",
+      date_to: "2026-04-04T23:59:59.999Z",
+      status: ["active"],
+      product_id: ["prod_target"],
+      frequency: ["month:1"],
+      group_by: AnalyticsGroupBy.MONTH,
+      timezone: "UTC",
+    })
+
+    expect(
+      response.series.find(
+        (series) => series.metric === AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT
+      )
+    ).toEqual(
+      expect.objectContaining({
+        unit: "count",
+        precision: 0,
+        points: [
+          expect.objectContaining({
+            bucket_start: "2026-04-01T00:00:00.000Z",
+            value: 2,
+          }),
+          expect.objectContaining({
+            bucket_start: "2026-04-02T00:00:00.000Z",
+            value: 0,
+          }),
+          expect.objectContaining({
+            bucket_start: "2026-04-03T00:00:00.000Z",
+            value: 1,
+          }),
+          expect.objectContaining({
+            bucket_start: "2026-04-04T00:00:00.000Z",
+            value: 0,
+          }),
+        ],
+      })
+    )
+  })
+
+  it("overrides the active trend point for the current UTC bucket with the live count", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-05-25T10:00:00.000Z"))
+
+    const rows = [
+      buildRow("prior_day_a", {
+        metric_date: "2026-05-24T00:00:00.000Z",
+        subscription_id: "sub_prior_a",
+        active_subscriptions_count: 2,
+      }),
+      buildRow("prior_day_b", {
+        metric_date: "2026-05-24T00:00:00.000Z",
+        subscription_id: "sub_prior_b",
+        active_subscriptions_count: 0,
+      }),
+      buildRow("today_snapshot", {
+        metric_date: "2026-05-25T00:00:00.000Z",
+        subscription_id: "sub_today_a",
+        active_subscriptions_count: 1,
+      }),
+    ]
+    const subscriptions = [
+      createSubscription("sub_today_a"),
+      createSubscription("sub_today_b"),
+      createSubscription("sub_today_c"),
+    ]
+    const { container } = createContainer(rows, subscriptions)
+
+    const response = await getAdminAnalyticsTrends(container, {
+      date_from: "2026-05-24T00:00:00.000Z",
+      date_to: "2026-05-25T23:59:59.999Z",
+      group_by: AnalyticsGroupBy.DAY,
+      timezone: "UTC",
+    })
+
+    expect(
+      response.series.find(
+        (series) => series.metric === AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT
+      )?.points
+    ).toEqual([
+      expect.objectContaining({
+        bucket_start: "2026-05-24T00:00:00.000Z",
+        value: 2,
+      }),
+      expect.objectContaining({
+        bucket_start: "2026-05-25T00:00:00.000Z",
+        value: 3,
+      }),
+    ])
   })
 
   it("applies status, product, and frequency filters before computing metrics", async () => {
@@ -429,7 +634,23 @@ describe("analytics admin-query read model", () => {
       timezone: "UTC",
     })
 
-    expect(trends.series.every((series) => series.points.length === 0)).toBe(true)
+    expect(
+      trends.series
+        .filter(
+          (series) => series.metric !== AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT
+        )
+        .every((series) => series.points.length === 0)
+    ).toBe(true)
+    expect(
+      trends.series.find(
+        (series) => series.metric === AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT
+      )?.points
+    ).toEqual([
+      expect.objectContaining({
+        bucket_start: "2026-04-02T00:00:00.000Z",
+        value: 0,
+      }),
+    ])
     expect(exportResponse.columns).toEqual([
       "bucket_start",
       "bucket_end",
@@ -439,6 +660,54 @@ describe("analytics admin-query read model", () => {
       "active_subscriptions_count",
     ])
     expect(exportResponse.rows).toEqual([])
+  })
+
+  it("uses live active subscription count when the requested window includes the current UTC day", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-05-25T10:00:00.000Z"))
+
+    const rows = [
+      buildRow("current_live_snapshot", {
+        metric_date: "2026-05-25T00:00:00.000Z",
+        subscription_id: "sub_live_a",
+        active_subscriptions_count: 1,
+        mrr_amount: 100,
+      }),
+      buildRow("previous_live_snapshot_a", {
+        metric_date: "2026-05-24T00:00:00.000Z",
+        subscription_id: "sub_prev_a",
+        active_subscriptions_count: 1,
+        mrr_amount: 100,
+      }),
+      buildRow("previous_live_snapshot_b", {
+        metric_date: "2026-05-24T00:00:00.000Z",
+        subscription_id: "sub_prev_b",
+        active_subscriptions_count: 1,
+        mrr_amount: 100,
+      }),
+    ]
+    const subscriptions = [
+      createSubscription("sub_live_a"),
+      createSubscription("sub_live_b"),
+      createSubscription("sub_live_c"),
+    ]
+    const { container } = createContainer(rows, subscriptions)
+
+    const response = await getAdminAnalyticsKpis(container, {
+      date_from: "2026-05-25T00:00:00.000Z",
+      date_to: "2026-05-25T23:59:59.999Z",
+      timezone: "UTC",
+    })
+
+    expect(
+      response.kpis.find(
+        (metric) => metric.key === AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT
+      )
+    ).toEqual(
+      expect.objectContaining({
+        value: 3,
+        previous_value: 2,
+      })
+    )
   })
 
   it("throws invalid_data for invalid ranges and unsupported filters", async () => {

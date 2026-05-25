@@ -160,6 +160,10 @@ These sections are read-oriented and designed for quick operator inspection.
 The `Product` section uses a linked Medusa-style card that opens the standard product variant detail page.
 `SKU` remains visible as a separate helper field under the card.
 
+Current data resolution rule:
+- `Customer` and `Product` display data are resolved live from linked Medusa records when available
+- when linked records are unavailable, the UI falls back to the persisted subscription snapshots
+
 ### Order Detail Widget
 
 The plugin also extends the standard Medusa `Order detail` page.

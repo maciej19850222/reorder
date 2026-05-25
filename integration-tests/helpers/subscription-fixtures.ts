@@ -21,6 +21,24 @@ type UserModuleService = {
   createUsers(data: Record<string, unknown>): Promise<{ id: string; email: string }>
 }
 
+type CustomerModuleService = {
+  createCustomers(data: Record<string, unknown>): Promise<{
+    id: string
+    email: string | null
+    first_name?: string | null
+    last_name?: string | null
+  }>
+  updateCustomers(
+    customerId: string,
+    data: Record<string, unknown>
+  ): Promise<{
+    id: string
+    email: string | null
+    first_name?: string | null
+    last_name?: string | null
+  }>
+}
+
 type SubscriptionSeedInput = {
   id?: string
   reference?: string
@@ -120,6 +138,36 @@ export async function createProductWithVariant(container: MedusaContainer) {
     product,
     variant,
   }
+}
+
+export async function createCustomer(container: MedusaContainer, input?: {
+  email?: string
+  first_name?: string | null
+  last_name?: string | null
+}) {
+  const customerModule =
+    container.resolve<CustomerModuleService>(Modules.CUSTOMER)
+
+  return await customerModule.createCustomers({
+    email: input?.email ?? `customer-${Date.now()}@medusa.test`,
+    first_name: input?.first_name ?? "Customer",
+    last_name: input?.last_name ?? "Live",
+  })
+}
+
+export async function updateCustomer(
+  container: MedusaContainer,
+  customerId: string,
+  input: {
+    email?: string
+    first_name?: string | null
+    last_name?: string | null
+  }
+) {
+  const customerModule =
+    container.resolve<CustomerModuleService>(Modules.CUSTOMER)
+
+  return await customerModule.updateCustomers(customerId, input)
 }
 
 export async function createSubscriptionSeed(

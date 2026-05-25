@@ -15,6 +15,7 @@ The `Analytics` area provides operator-facing reporting and KPI views for recurr
 Its purpose is to:
 - expose stable KPI values such as `MRR`, `churn_rate`, `ltv`, and `active_subscriptions_count`
 - expose time-based trends for operational and business review
+- expose a daily created-subscriptions trend for operator review
 - support filtering, grouping, and export in Admin
 - provide a fast read-oriented analytics layer without changing domain ownership in the plugin
 
@@ -112,6 +113,9 @@ For MVP, the primary source mapping is:
 - `LTV`
   - primary source: derived by `Analytics`
   - built from source facts owned by `Subscriptions`, `Renewals`, and possibly `Cancellation & Retention`, depending on the final business definition
+- `created_subscriptions_count`
+  - primary source: `Subscriptions`
+  - based on `subscription.created_at` grouped by UTC day
 
 ## Business Definitions and Calculation Semantics
 
@@ -197,6 +201,11 @@ Analytics date ranges follow these rules:
 - KPI calculations operate on facts within the selected reporting period
 - trend calculations operate on normalized bucket windows within the selected reporting period
 
+For the created-subscriptions trend specifically:
+- the reporting window is still controlled by `date_from` and `date_to`
+- buckets are always daily UTC buckets
+- `status`, `product_id`, `frequency`, and `group_by` do not affect that series
+
 ### Bucket Semantics
 
 Supported reporting buckets:
@@ -234,6 +243,7 @@ MVP display precision:
 - `churn_rate`: `2`
 - `LTV`: `2`
 - `active_subscriptions_count`: `0`
+- `created_subscriptions_count`: `0`
 
 ### Currency Semantics
 
@@ -506,6 +516,11 @@ This means:
 - trend queries group persisted snapshot facts into `day`, `week`, and `month` buckets
 - export queries flatten the same reporting source into export-ready rows
 
+Implemented exception:
+- the created-subscriptions trend is read directly from `subscription.created_at`
+- it is rendered as one UTC day bucket per point
+- it is not sourced from `subscription_metrics_daily`
+
 The Admin read path should not:
 - compute analytics live from source modules on every request
 - use `Activity Log` as its primary fact source
@@ -648,8 +663,9 @@ Pure refactors without output changes should not bump the version.
 
 ## Implemented Read Model
 
-The implemented Admin read model lives in analytics query helpers and reads only from:
+The implemented Admin read model lives in analytics query helpers and reads primarily from:
 - `subscription_metrics_daily`
+- `subscription.created_at` for the created-subscriptions trend only
 
 It does not recompute KPI values from live operational modules on each request.
 
@@ -657,6 +673,12 @@ Implemented read surfaces:
 - KPI summary
 - trend series
 - export rows
+
+Implemented trend exception:
+- `created_subscriptions_count`
+  - grouped from `subscription.created_at`
+  - always returned as daily UTC buckets
+  - zero-fills missing days inside the selected range
 
 ### KPI Semantics in the Implemented Read Layer
 

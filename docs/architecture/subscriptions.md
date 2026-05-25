@@ -52,9 +52,10 @@ It contains:
 
 Key design choice:
 - the subscription entity stores the operational state required by Admin and future renewal flows directly in its own model
-- it does not rely on live reads from customer or product modules for core list/detail rendering
+- Admin read models use live enrichment from linked customer and product records where available
+- persisted snapshots remain on the subscription as operational fallback and historical context
 
-This keeps the Admin read model stable and reduces coupling to external entity changes.
+This keeps the operational model stable while allowing Admin to show current linked customer and product data.
 
 ## 2. Data Model
 
@@ -95,6 +96,7 @@ Snapshot JSON fields include:
 Why snapshots are used:
 - the Admin should display a stable picture of the subscription even if the linked customer or product changes later
 - future renewal logic needs operational data local to the subscription
+- current Admin read models use snapshot fallback when linked records are missing or unresolved
 
 ## 3. Read Path
 
@@ -112,7 +114,8 @@ For the list view:
 2. the admin route validates and normalizes query input
 3. `listAdminSubscriptions(...)` builds filters and sorting rules
 4. the query layer reads subscriptions through `query.graph(...)`
-5. records are mapped to Admin DTOs used by the DataTable
+5. live customer and product display data are enriched through query-time reads with snapshot fallback
+6. records are mapped to Admin DTOs used by the DataTable
 
 Supported capabilities include:
 - pagination

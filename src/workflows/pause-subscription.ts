@@ -14,7 +14,21 @@ import {
   ActivityLogActorType,
   ActivityLogEventType,
 } from "../modules/activity-log/types"
+import { rebuildAnalyticsDailySnapshotsWorkflow } from "./rebuild-analytics-daily-snapshots"
 import { toISOStringOrNull } from "./utils/date-output"
+import { buildAnalyticsIncrementalRebuildInput } from "./utils/analytics-incremental"
+
+export function buildPauseSubscriptionAnalyticsRebuildInput(input: {
+  paused_at: Date | string | null
+  triggered_by?: string | null
+}) {
+  return buildAnalyticsIncrementalRebuildInput({
+    occurred_at: input.paused_at ?? new Date(),
+    trigger_source: "pause_subscription",
+    correlation_id: null,
+    triggered_by: input.triggered_by ?? null,
+  })
+}
 
 export const pauseSubscriptionWorkflow = createWorkflow(
   "pause-subscription",
@@ -68,6 +82,18 @@ export const pauseSubscriptionWorkflow = createWorkflow(
       }
     })
     const renewal_cycle = ensureNextRenewalCycleStep(ensureInput)
+    const incrementalAnalyticsInput = transform(
+      { subscriptionChange, input },
+      function ({ subscriptionChange, input }) {
+        return buildPauseSubscriptionAnalyticsRebuildInput({
+          paused_at: subscriptionChange.current.paused_at,
+          triggered_by: input.triggered_by ?? null,
+        })
+      }
+    )
+    rebuildAnalyticsDailySnapshotsWorkflow.runAsStep({
+      input: incrementalAnalyticsInput,
+    })
 
     return new WorkflowResponse({
       subscription: subscriptionChange.current,

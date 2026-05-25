@@ -150,10 +150,32 @@ medusaIntegrationTestRunner({
 
         expect(emptyTrendsResponse.status).toEqual(200)
         expect(
-          emptyTrendsResponse.data.series.every(
-            (series: { points: unknown[] }) => series.points.length === 0
-          )
+          emptyTrendsResponse.data.series
+            .filter(
+              (series: { metric: string }) =>
+                series.metric !== "created_subscriptions_count"
+            )
+            .every((series: { points: unknown[] }) => series.points.length === 0)
         ).toBe(true)
+        expect(
+          emptyTrendsResponse.data.series.find(
+            (series: { metric: string }) =>
+              series.metric === "created_subscriptions_count"
+          )
+        ).toEqual(
+          expect.objectContaining({
+            points: expect.arrayContaining([
+              expect.objectContaining({
+                bucket_start: "2026-04-01T00:00:00.000Z",
+                value: 0,
+              }),
+              expect.objectContaining({
+                bucket_start: "2026-04-10T00:00:00.000Z",
+                value: 0,
+              }),
+            ]),
+          })
+        )
       })
 
       it("surfaces validation errors for unsupported query combinations", async () => {

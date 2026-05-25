@@ -9,8 +9,10 @@ import {
 } from "../../src/modules/plan-offer/types"
 import {
   createAdminAuthHeaders,
+  createCustomer,
   createProductWithVariant,
   createSubscriptionSeed,
+  updateCustomer,
 } from "./subscription-fixtures"
 
 type PlanOfferSeedInput = {
@@ -39,7 +41,13 @@ type PlanOfferSeedInput = {
   metadata?: Record<string, unknown> | null
 }
 
-export { createAdminAuthHeaders, createProductWithVariant, createSubscriptionSeed }
+export {
+  createAdminAuthHeaders,
+  createCustomer,
+  createProductWithVariant,
+  createSubscriptionSeed,
+  updateCustomer,
+}
 
 export async function createPlanOfferSeed(
   container: MedusaContainer,

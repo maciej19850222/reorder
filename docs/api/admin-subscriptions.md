@@ -241,6 +241,7 @@ Shape:
 Notes:
 - `next_renewal_at` remains the technical billing anchor used by renewals
 - `effective_next_renewal_at` is the projected next renewal date shown in Admin when `skip_next_cycle` is enabled
+- customer and product display fields are resolved live from linked Medusa records when available, with fallback to persisted subscription snapshots when linked records are missing
 
 ### Common Errors
 

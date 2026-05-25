@@ -9,6 +9,7 @@ export enum AnalyticsMetricKey {
   CHURN_RATE = "churn_rate",
   LTV = "ltv",
   ACTIVE_SUBSCRIPTIONS_COUNT = "active_subscriptions_count",
+  CREATED_SUBSCRIPTIONS_COUNT = "created_subscriptions_count",
 }
 
 export type AnalyticsSubscriptionStatus =

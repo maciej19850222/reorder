@@ -57,6 +57,17 @@ type SubscriptionMetricsDailyRecord = {
   metadata: Record<string, unknown> | null
 }
 
+type LiveSubscriptionRecord = {
+  id: string
+  frequency_interval: AnalyticsFrequencyInterval
+  frequency_value: number
+}
+
+type CreatedSubscriptionRecord = {
+  id: string
+  created_at: string
+}
+
 type DaySummary = {
   metric_date: string
   active_subscriptions_count: number
@@ -101,6 +112,7 @@ const METRIC_LABELS: Record<AnalyticsMetricKey, string> = {
   [AnalyticsMetricKey.CHURN_RATE]: "Churn Rate",
   [AnalyticsMetricKey.LTV]: "LTV",
   [AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT]: "Active Subscriptions",
+  [AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT]: "Created Subscriptions",
 }
 
 function getQuery(container: MedusaContainer) {
@@ -196,6 +208,21 @@ function shiftDays(value: Date, days: number) {
   next.setUTCDate(next.getUTCDate() + days)
 
   return next
+}
+
+function filterIncludesCurrentUtcDay(filters: AdminAnalyticsFilters) {
+  if (!filters.date_from || !filters.date_to) {
+    return false
+  }
+
+  const todayStart = toUtcDayStart(new Date())
+  const rangeFrom = toUtcDayStart(filters.date_from)
+  const rangeTo = toUtcDayStart(filters.date_to)
+
+  return (
+    rangeFrom.getTime() <= todayStart.getTime() &&
+    rangeTo.getTime() >= todayStart.getTime()
+  )
 }
 
 function roundValue(value: number | null, precision: number) {
@@ -377,6 +404,130 @@ async function listMetricsDailyRows(
   )
 }
 
+async function getLiveActiveSubscriptionsCount(
+  container: MedusaContainer,
+  filters: AdminAnalyticsFilters
+) {
+  if (filters.status.length && !filters.status.includes("active")) {
+    return 0
+  }
+
+  const query = getQuery(container)
+  const rows: LiveSubscriptionRecord[] = []
+  const take = 500
+  let skip = 0
+
+  while (true) {
+    const result = await query.graph({
+      entity: "subscription",
+      fields: ["id", "frequency_interval", "frequency_value"],
+      filters: {
+        status: ["active"],
+        ...(filters.product_id.length ? { product_id: filters.product_id } : {}),
+      },
+      pagination: {
+        take,
+        skip,
+        order: {
+          id: "ASC",
+        },
+      },
+    })
+
+    const batch = (result.data ?? []) as LiveSubscriptionRecord[]
+    rows.push(...batch)
+
+    if (!batch.length || rows.length >= (result.metadata?.count ?? 0)) {
+      break
+    }
+
+    skip += result.metadata?.take ?? take
+  }
+
+  if (!filters.frequency.length) {
+    return rows.length
+  }
+
+  const allowedTokens = new Set(
+    filters.frequency.map((frequency) => `${frequency.interval}:${frequency.value}`)
+  )
+
+  return rows.filter((row) =>
+    allowedTokens.has(`${row.frequency_interval}:${row.frequency_value}`)
+  ).length
+}
+
+async function listCreatedSubscriptions(
+  container: MedusaContainer,
+  filters: {
+    date_from: string
+    date_to: string
+  }
+): Promise<CreatedSubscriptionRecord[]> {
+  const query = getQuery(container)
+  const rows: CreatedSubscriptionRecord[] = []
+  const take = 500
+  let skip = 0
+
+  while (true) {
+    const result = await query.graph({
+      entity: "subscription",
+      fields: ["id", "created_at"],
+      filters: {
+        created_at: {
+          $gte: filters.date_from,
+          $lte: filters.date_to,
+        },
+      },
+      pagination: {
+        take,
+        skip,
+        order: {
+          created_at: "ASC",
+          id: "ASC",
+        },
+      },
+    })
+
+    const batch = (result.data ?? []) as CreatedSubscriptionRecord[]
+    rows.push(...batch)
+
+    if (!batch.length || rows.length >= (result.metadata?.count ?? 0)) {
+      break
+    }
+
+    skip += result.metadata?.take ?? take
+  }
+
+  return rows
+}
+
+function overrideLiveActiveBucket(
+  buckets: BucketSummary[],
+  filters: AdminAnalyticsFilters,
+  liveActiveSubscriptionsCount: number | null
+) {
+  if (!buckets.length || liveActiveSubscriptionsCount === null) {
+    return buckets
+  }
+
+  const todayStart = toUtcDayStart(new Date()).getTime()
+
+  return buckets.map((bucket) => {
+    const bucketStart = new Date(bucket.bucket_start).getTime()
+    const bucketEnd = new Date(bucket.bucket_end).getTime()
+
+    if (bucketStart <= todayStart && bucketEnd >= todayStart) {
+      return {
+        ...bucket,
+        active_subscriptions_count: liveActiveSubscriptionsCount,
+      }
+    }
+
+    return bucket
+  })
+}
+
 function buildDaySummaries(rows: SubscriptionMetricsDailyRecord[]) {
   const summaryByDay = new Map<string, DaySummary>()
 
@@ -535,7 +686,10 @@ function computeLtv(mrr: number | null, churnRate: number) {
 }
 
 function metricUnit(metric: AnalyticsMetricKey): "currency" | "percentage" | "count" {
-  if (metric === AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT) {
+  if (
+    metric === AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT ||
+    metric === AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT
+  ) {
     return "count"
   }
 
@@ -547,7 +701,10 @@ function metricUnit(metric: AnalyticsMetricKey): "currency" | "percentage" | "co
 }
 
 function metricPrecision(metric: AnalyticsMetricKey) {
-  return metric === AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT ? 0 : 2
+  return metric === AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT ||
+    metric === AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT
+    ? 0
+    : 2
 }
 
 function buildKpiValue(
@@ -629,6 +786,8 @@ function buildTrendPoints(
 
     if (metric === AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT) {
       value = bucket.active_subscriptions_count
+    } else if (metric === AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT) {
+      value = 0
     } else if (metric === AnalyticsMetricKey.MRR) {
       value = bucket.has_mixed_currency ? null : bucket.mrr_amount
     } else if (metric === AnalyticsMetricKey.CHURN_RATE) {
@@ -673,6 +832,54 @@ function buildTrendSeries(
   }
 }
 
+function buildCreatedSubscriptionsSeries(
+  filters: {
+    date_from: string
+    date_to: string
+  },
+  rows: CreatedSubscriptionRecord[]
+): AnalyticsTrendSeries {
+  const countsByDay = new Map<string, number>()
+
+  for (const row of rows) {
+    const createdAt = new Date(row.created_at)
+
+    if (Number.isNaN(createdAt.getTime())) {
+      continue
+    }
+
+    const dayKey = toUtcDayStart(createdAt).toISOString()
+    countsByDay.set(dayKey, (countsByDay.get(dayKey) ?? 0) + 1)
+  }
+
+  const start = toUtcDayStart(filters.date_from)
+  const end = toUtcDayStart(filters.date_to)
+  const points: AnalyticsTrendPoint[] = []
+
+  for (
+    let cursor = new Date(start);
+    cursor.getTime() <= end.getTime();
+    cursor = shiftDays(cursor, 1)
+  ) {
+    const bucketStart = toUtcDayStart(cursor).toISOString()
+
+    points.push({
+      bucket_start: bucketStart,
+      bucket_end: toUtcDayEnd(cursor).toISOString(),
+      value: countsByDay.get(bucketStart) ?? 0,
+    })
+  }
+
+  return {
+    metric: AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT,
+    label: METRIC_LABELS[AnalyticsMetricKey.CREATED_SUBSCRIPTIONS_COUNT],
+    unit: "count",
+    currency_code: null,
+    precision: 0,
+    points,
+  }
+}
+
 async function buildAnalyticsSnapshot(
   container: MedusaContainer,
   input: ListAdminAnalyticsInput
@@ -702,11 +909,17 @@ async function buildAnalyticsSnapshot(
     buildDaySummaries(previousRows),
     normalized.filters.group_by
   )
+  const liveActiveSubscriptionsCount = filterIncludesCurrentUtcDay(
+    normalized.filters
+  )
+    ? await getLiveActiveSubscriptionsCount(container, normalized.filters)
+    : null
 
   return {
     normalized,
     currentBuckets,
     previousBuckets,
+    liveActiveSubscriptionsCount,
   }
 }
 
@@ -722,6 +935,8 @@ export async function getAdminAnalyticsKpis(
     const snapshot = await buildAnalyticsSnapshot(container, input)
     const currentSet = deriveKpiSet(snapshot.currentBuckets)
     const previousSet = deriveKpiSet(snapshot.previousBuckets)
+    const currentActiveSubscriptionsCount =
+      snapshot.liveActiveSubscriptionsCount ?? currentSet.active_subscriptions_count
     const response = {
       filters: snapshot.normalized.filters,
       metrics_version: ANALYTICS_METRICS_VERSION,
@@ -747,7 +962,7 @@ export async function getAdminAnalyticsKpis(
         ),
         buildKpiValue(
           AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT,
-          currentSet.active_subscriptions_count,
+          currentActiveSubscriptionsCount,
           previousSet.active_subscriptions_count,
           null
         ),
@@ -811,9 +1026,25 @@ export async function getAdminAnalyticsTrends(
   try {
     const normalized = normalizeAnalyticsQueryInput(input)
     const rows = await listMetricsDailyRows(container, normalized.filters)
-    const buckets = buildBucketSummaries(
-      buildDaySummaries(rows),
-      normalized.filters.group_by
+    const createdSubscriptions = await listCreatedSubscriptions(
+      container,
+      {
+        date_from: normalized.filters.date_from as string,
+        date_to: normalized.filters.date_to as string,
+      }
+    )
+    const liveActiveSubscriptionsCount = filterIncludesCurrentUtcDay(
+      normalized.filters
+    )
+      ? await getLiveActiveSubscriptionsCount(container, normalized.filters)
+      : null
+    const buckets = overrideLiveActiveBucket(
+      buildBucketSummaries(
+        buildDaySummaries(rows),
+        normalized.filters.group_by
+      ),
+      normalized.filters,
+      liveActiveSubscriptionsCount
     )
     const response = {
       filters: normalized.filters,
@@ -824,6 +1055,13 @@ export async function getAdminAnalyticsTrends(
         buildTrendSeries(buckets, AnalyticsMetricKey.CHURN_RATE),
         buildTrendSeries(buckets, AnalyticsMetricKey.LTV),
         buildTrendSeries(buckets, AnalyticsMetricKey.ACTIVE_SUBSCRIPTIONS_COUNT),
+        buildCreatedSubscriptionsSeries(
+          {
+            date_from: normalized.filters.date_from as string,
+            date_to: normalized.filters.date_to as string,
+          },
+          createdSubscriptions
+        ),
       ],
     } satisfies AnalyticsTrendsAdminResponse
     const durationMs = Date.now() - startedAt
@@ -849,6 +1087,7 @@ export async function getAdminAnalyticsTrends(
         metadata: {
           filters: response.filters,
           row_count: rows.length,
+          created_subscription_count: createdSubscriptions.length,
           bucket_count: buckets.length,
           series_count: response.series.length,
         },

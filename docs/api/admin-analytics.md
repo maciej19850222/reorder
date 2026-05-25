@@ -48,11 +48,16 @@ All successful analytics responses also include:
 
 ### Metric Keys
 
-Supported KPI and trend metric keys:
+Supported analytics metric keys across KPI and trend responses:
 - `mrr`
 - `churn_rate`
 - `ltv`
 - `active_subscriptions_count`
+- `created_subscriptions_count`
+
+Implemented surface rules:
+- `created_subscriptions_count` is returned by the trends response only
+- KPI cards remain `mrr`, `churn_rate`, `ltv`, and `active_subscriptions_count`
 
 ### Grouping Values
 
@@ -121,6 +126,7 @@ An empty dataset is not treated as an API error.
 Current runtime behavior:
 - `kpis` still returns all KPI keys
 - `trends` returns valid series with empty or null-valued points depending on the range
+- `created_subscriptions_count` returns a zero-filled daily series across the requested range
 - `export` returns a valid payload with empty `rows`
 
 ### Frequency Request Encoding
@@ -260,6 +266,11 @@ Shape:
 
 Returns grouped time-series data used by the Admin analytics chart.
 
+Implemented exception:
+- `created_subscriptions_count` is always grouped by UTC day
+- `created_subscriptions_count` is sourced from `subscription.created_at`
+- `created_subscriptions_count` ignores `status`, `product_id`, `frequency`, and `group_by`
+
 ### Query Parameters
 
 Filters:
@@ -327,6 +338,25 @@ Shape:
           "value": 178
         }
       ]
+    },
+    {
+      "metric": "created_subscriptions_count",
+      "label": "Created Subscriptions",
+      "unit": "count",
+      "currency_code": null,
+      "precision": 0,
+      "points": [
+        {
+          "bucket_start": "2026-04-01T00:00:00.000Z",
+          "bucket_end": "2026-04-01T23:59:59.999Z",
+          "value": 3
+        },
+        {
+          "bucket_start": "2026-04-02T00:00:00.000Z",
+          "bucket_end": "2026-04-02T23:59:59.999Z",
+          "value": 0
+        }
+      ]
     }
   ]
 }
@@ -340,6 +370,8 @@ Shape:
 - series may contain `value = null` when the bucket exists but the metric cannot be computed
 - bucket semantics use `UTC` in MVP
 - `MRR` and `LTV` series may contain `value = null` for buckets where no valid single-currency revenue snapshot is available
+- `created_subscriptions_count` is always returned as daily UTC buckets, even if `group_by` is `week` or `month`
+- `created_subscriptions_count` zero-fills missing days inside the selected range
 
 ### Common Errors
 

@@ -121,6 +121,36 @@ type OrderRecord = {
   created_at: string | null
 }
 
+type LiveCustomerRecord = {
+  id: string
+  email?: string | null
+  first_name?: string | null
+  last_name?: string | null
+}
+
+type LiveProductRecord = {
+  id: string
+  title?: string | null
+}
+
+type LiveVariantRecord = {
+  id: string
+  title?: string | null
+  sku?: string | null
+  product?: {
+    id?: string | null
+    title?: string | null
+  } | null
+}
+
+type SubscriptionDisplayData = {
+  customer_name: string
+  customer_email: string
+  product_title: string
+  variant_title: string
+  sku: string | null
+}
+
 const listFields = [
   "id",
   "reference",
@@ -228,9 +258,29 @@ function mapPendingUpdateData(
   }
 }
 
-function mapListItem(record: SubscriptionRecord): SubscriptionAdminListItem {
-  const customer = record.customer_snapshot ?? {}
-  const product = record.product_snapshot ?? {}
+function mapListItem(
+  record: SubscriptionRecord,
+  displayData?: SubscriptionDisplayData
+): SubscriptionAdminListItem {
+  const fallbackCustomer = record.customer_snapshot ?? {}
+  const fallbackProduct = record.product_snapshot ?? {}
+  const customerName =
+    displayData?.customer_name ??
+    fallbackCustomer.full_name ??
+    "Unknown customer"
+  const customerEmail =
+    displayData?.customer_email ??
+    fallbackCustomer.email ??
+    ""
+  const productTitle =
+    displayData?.product_title ??
+    fallbackProduct.product_title ??
+    "Unknown product"
+  const variantTitle =
+    displayData?.variant_title ??
+    fallbackProduct.variant_title ??
+    "Unknown variant"
+  const sku = displayData?.sku ?? fallbackProduct.sku ?? null
 
   const frequency: SubscriptionAdminFrequency = {
     interval:
@@ -259,15 +309,15 @@ function mapListItem(record: SubscriptionRecord): SubscriptionAdminListItem {
             : SubscriptionAdminStatus.PAST_DUE,
     customer: {
       id: record.customer_id,
-      full_name: customer.full_name ?? "Unknown customer",
-      email: customer.email ?? "",
+      full_name: customerName,
+      email: customerEmail,
     },
     product: {
       product_id: record.product_id,
-      product_title: product.product_title ?? "Unknown product",
+      product_title: productTitle,
       variant_id: record.variant_id,
-      variant_title: product.variant_title ?? "Unknown variant",
-      sku: product.sku ?? null,
+      variant_title: variantTitle,
+      sku,
     },
     frequency,
     next_renewal_at: record.next_renewal_at,
@@ -289,9 +339,12 @@ function mapListItem(record: SubscriptionRecord): SubscriptionAdminListItem {
   }
 }
 
-function mapDetail(record: SubscriptionRecord): SubscriptionAdminDetail {
+function mapDetail(
+  record: SubscriptionRecord,
+  displayData?: SubscriptionDisplayData
+): SubscriptionAdminDetail {
   return {
-    ...mapListItem(record),
+    ...mapListItem(record, displayData),
     created_at: record.created_at,
     started_at: record.started_at,
     paused_at: record.paused_at,
@@ -502,6 +555,116 @@ function matchesSearch(item: SubscriptionAdminListItem, search: string) {
     .includes(value)
 }
 
+function buildCustomerDisplayName(customer?: LiveCustomerRecord | null) {
+  if (!customer) {
+    return null
+  }
+
+  const fullName = [customer.first_name, customer.last_name]
+    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+    .join(" ")
+    .trim()
+
+  return fullName || null
+}
+
+async function getSubscriptionDisplayDataMap(
+  container: MedusaContainer,
+  records: SubscriptionRecord[]
+): Promise<Map<string, SubscriptionDisplayData>> {
+  if (!records.length) {
+    return new Map()
+  }
+
+  const query = container.resolve(ContainerRegistrationKeys.QUERY)
+  const customerIds = [...new Set(records.map((record) => record.customer_id))]
+  const productIds = [...new Set(records.map((record) => record.product_id))]
+  const variantIds = [...new Set(records.map((record) => record.variant_id))]
+
+  const [customersResult, productsResult, variantsResult] = await Promise.all([
+    customerIds.length
+      ? query.graph({
+          entity: "customer",
+          fields: ["id", "email", "first_name", "last_name"],
+          filters: {
+            id: customerIds,
+          },
+        })
+      : Promise.resolve({ data: [] }),
+    productIds.length
+      ? query.graph({
+          entity: "product",
+          fields: ["id", "title"],
+          filters: {
+            id: productIds,
+          },
+        })
+      : Promise.resolve({ data: [] }),
+    variantIds.length
+      ? query.graph({
+          entity: "variant",
+          fields: ["id", "title", "sku", "product.id", "product.title"],
+          filters: {
+            id: variantIds,
+          },
+        })
+      : Promise.resolve({ data: [] }),
+  ])
+
+  const customers = new Map(
+    ((customersResult.data ?? []) as LiveCustomerRecord[]).map((customer) => [
+      customer.id,
+      customer,
+    ])
+  )
+  const products = new Map(
+    ((productsResult.data ?? []) as LiveProductRecord[]).map((product) => [
+      product.id,
+      product,
+    ])
+  )
+  const variants = new Map(
+    ((variantsResult.data ?? []) as LiveVariantRecord[]).map((variant) => [
+      variant.id,
+      variant,
+    ])
+  )
+
+  return new Map(
+    records.map((record) => {
+      const fallbackCustomer = record.customer_snapshot ?? {}
+      const fallbackProduct = record.product_snapshot ?? {}
+      const customer = customers.get(record.customer_id)
+      const product = products.get(record.product_id)
+      const variant = variants.get(record.variant_id)
+
+      return [
+        record.id,
+        {
+          customer_name:
+            buildCustomerDisplayName(customer) ??
+            fallbackCustomer.full_name ??
+            "Unknown customer",
+          customer_email:
+            customer?.email ??
+            fallbackCustomer.email ??
+            "",
+          product_title:
+            product?.title ??
+            variant?.product?.title ??
+            fallbackProduct.product_title ??
+            "Unknown product",
+          variant_title:
+            variant?.title ??
+            fallbackProduct.variant_title ??
+            "Unknown variant",
+          sku: variant?.sku ?? fallbackProduct.sku ?? null,
+        },
+      ]
+    })
+  )
+}
+
 export async function listAdminSubscriptions(
   container: MedusaContainer,
   input: ListAdminSubscriptionsInput
@@ -540,8 +703,13 @@ export async function listAdminSubscriptions(
       },
     })
 
+    const records = data as SubscriptionRecord[]
+    const displayDataMap = await getSubscriptionDisplayDataMap(container, records)
+
     return {
-      subscriptions: (data as SubscriptionRecord[]).map(mapListItem),
+      subscriptions: records.map((record) =>
+        mapListItem(record, displayDataMap.get(record.id))
+      ),
       count,
       limit: take,
       offset: skip,
@@ -561,7 +729,11 @@ export async function listAdminSubscriptions(
       : undefined,
   })
 
-  let items = (data as SubscriptionRecord[]).map(mapListItem)
+  const records = data as SubscriptionRecord[]
+  const displayDataMap = await getSubscriptionDisplayDataMap(container, records)
+  let items = records.map((record) =>
+    mapListItem(record, displayDataMap.get(record.id))
+  )
 
   if (input.q) {
     items = items.filter((item) => matchesSearch(item, input.q!))
@@ -598,6 +770,10 @@ export async function getAdminSubscriptionDetail(
   if (!subscription) {
     throw subscriptionErrors.notFound("Subscription", id)
   }
+
+  const displayDataMap = await getSubscriptionDisplayDataMap(container, [
+    subscription,
+  ])
 
   const [subscriptionOrderLinksResult, renewalCyclesResult] = await Promise.all([
     query.graph({
@@ -680,7 +856,7 @@ export async function getAdminSubscriptionDetail(
 
   return {
     subscription: {
-      ...mapDetail(subscription),
+      ...mapDetail(subscription, displayDataMap.get(subscription.id)),
       initial_order: initialOrder,
       renewal_orders: renewalOrders,
     },

@@ -13,9 +13,12 @@ import {
 } from "../../src/workflows"
 import {
   createPlanOfferSeed,
+  createCustomer,
   createProductWithVariant,
   createSubscriptionSeed,
+  updateCustomer,
 } from "../helpers/plan-offer-fixtures"
+import { Modules } from "@medusajs/framework/utils"
 import {
   PlanOfferFrequencyInterval,
   PlanOfferScope,
@@ -30,6 +33,13 @@ import {
   ActivityLogActorType,
   ActivityLogEventType,
 } from "../../src/modules/activity-log/types"
+
+type ProductModuleService = {
+  updateProducts(
+    id: string,
+    data: Record<string, unknown>
+  ): Promise<Record<string, unknown>>
+}
 
 medusaIntegrationTestRunner({
   medusaConfigFile: path.resolve(process.cwd(), "integration-tests"),
@@ -75,6 +85,70 @@ medusaIntegrationTestRunner({
 
         expect(response.subscription.id).toEqual(subscription.id)
         expect(response.subscription.shipping_address.city).toEqual("Warszawa")
+        expect(response.subscription.customer.full_name).toEqual("Customer Test")
+        expect(response.subscription.product.product_title).toEqual(
+          "Subscription Product"
+        )
+      })
+
+      it("uses live customer and product data with snapshot fallback", async () => {
+        const container = getContainer()
+        const productModule =
+          container.resolve<ProductModuleService>(Modules.PRODUCT)
+        const customer = await createCustomer(container, {
+          email: "before-live@example.com",
+          first_name: "Before",
+          last_name: "Live",
+        })
+        const { product, variant } = await createProductWithVariant(container)
+        const subscription = await createSubscriptionSeed(container, {
+          reference: "SUB-LIVE-DETAIL-001",
+          customer_id: customer.id,
+          product_id: product.id,
+          variant_id: variant.id,
+        })
+
+        await updateCustomer(container, customer.id, {
+          email: "after-live@example.com",
+          first_name: "After",
+          last_name: "Live",
+        })
+        await productModule.updateProducts(product.id, {
+          title: "Live Product Title",
+        })
+
+        const detailResponse = await getAdminSubscriptionDetail(
+          container,
+          subscription.id
+        )
+        const listResponse = await listAdminSubscriptions(container, {
+          limit: 10,
+          offset: 0,
+          q: "after-live@example.com",
+        })
+
+        expect(detailResponse.subscription.customer.full_name).toEqual(
+          "After Live"
+        )
+        expect(detailResponse.subscription.customer.email).toEqual(
+          "after-live@example.com"
+        )
+        expect(detailResponse.subscription.product.product_title).toEqual(
+          "Live Product Title"
+        )
+        expect(detailResponse.subscription.product.variant_title).toEqual(
+          variant.title
+        )
+        expect(detailResponse.subscription.product.sku).toEqual(variant.sku)
+
+        expect(listResponse.subscriptions).toHaveLength(1)
+        expect(listResponse.subscriptions[0].id).toEqual(subscription.id)
+        expect(listResponse.subscriptions[0].customer.full_name).toEqual(
+          "After Live"
+        )
+        expect(listResponse.subscriptions[0].product.product_title).toEqual(
+          "Live Product Title"
+        )
       })
 
       it("pauses and resumes a subscription", async () => {

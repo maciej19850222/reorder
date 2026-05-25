@@ -2,7 +2,12 @@ import { RebuildAnalyticsDailySnapshotsWorkflowInput } from "../rebuild-analytic
 
 type BuildAnalyticsIncrementalRebuildInput = {
   occurred_at?: Date | string | null
-  trigger_source: "resume_subscription" | "finalize_cancellation" | "renewal_processed"
+  trigger_source:
+    | "pause_subscription"
+    | "resume_subscription"
+    | "cancel_subscription"
+    | "finalize_cancellation"
+    | "renewal_processed"
   correlation_id?: string | null
   triggered_by?: string | null
 }

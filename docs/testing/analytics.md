@@ -62,8 +62,10 @@ This layer covers:
 - `churn_rate`
 - `LTV`
 - `active_subscriptions_count`
+- `created_subscriptions_count`
 - bucket grouping for `day`, `week`, and `month`
 - filters for `status`, `product_id`, and `frequency`
+- zero-filled created-subscription day buckets
 - mixed-currency behavior
 - empty dataset behavior
 - invalid range and invalid frequency semantics
@@ -126,6 +128,7 @@ Covered:
 - KPI formulas
 - bucket semantics
 - filter semantics
+- created-subscription daily aggregation semantics
 - nullability for mixed-currency and insufficient revenue data
 - empty dataset behavior
 
