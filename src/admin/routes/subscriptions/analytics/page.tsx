@@ -596,6 +596,13 @@ const TrendChartSkeleton = () => {
 }
 
 const TrendChart = ({ series }: { series: AnalyticsTrendSeries }) => {
+  const [hoveredPoint, setHoveredPoint] = useState<{
+    bucket_start: string
+    value: number
+    cursor_x: number
+    cursor_y: number
+  } | null>(null)
+
   const numericPoints = series.points
     .map((point, index) => ({
       index,
@@ -684,47 +691,109 @@ const TrendChart = ({ series }: { series: AnalyticsTrendSeries }) => {
         </div>
       </div>
       <div className="rounded-lg border border-ui-border-base bg-ui-bg-subtle px-3 py-3">
-        <svg
-          viewBox={`0 0 ${width} ${height}`}
-          role="img"
-          aria-label={`${series.label} trend chart`}
-          className="h-[280px] w-full"
-        >
-          <defs>
-            <linearGradient id="analytics-area-gradient" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.18" />
-              <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02" />
-            </linearGradient>
-          </defs>
-          <line
-            x1={padding}
-            y1={height - padding}
-            x2={width - padding}
-            y2={height - padding}
-            stroke="#d6d9df"
-            strokeWidth="1"
-          />
-          <path d={areaPath} fill="url(#analytics-area-gradient)" />
-          <path
-            d={linePath}
-            fill="none"
-            stroke="#2563eb"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth="3"
-          />
-          {coordinates.map((point) => (
-            <circle
-              key={`${point.bucket_start}-${point.index}`}
-              cx={point.x}
-              cy={point.y}
-              r="4"
-              fill="#2563eb"
-              stroke="#ffffff"
-              strokeWidth="2"
+        <div className="relative">
+          {hoveredPoint ? (
+            <div
+              className="pointer-events-none absolute top-2 z-10 rounded-md border border-ui-border-base bg-ui-bg-base px-3 py-2 shadow-elevation-card-rest"
+              style={{
+                left: `${hoveredPoint.cursor_x}px`,
+                top: `${Math.max(8, hoveredPoint.cursor_y - 12)}px`,
+                transform: "translate(-50%, -100%)",
+              }}
+            >
+              <Text size="small" leading="compact" weight="plus">
+                {formatDateLabel(hoveredPoint.bucket_start)}
+              </Text>
+              <Text size="small" leading="compact" className="text-ui-fg-subtle">
+                {formatTrendValue(hoveredPoint.value, series)}
+              </Text>
+            </div>
+          ) : null}
+          <svg
+            viewBox={`0 0 ${width} ${height}`}
+            role="img"
+            aria-label={`${series.label} trend chart`}
+            className="h-[280px] w-full"
+          >
+            <defs>
+              <linearGradient id="analytics-area-gradient" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.18" />
+                <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02" />
+              </linearGradient>
+            </defs>
+            <line
+              x1={padding}
+              y1={height - padding}
+              x2={width - padding}
+              y2={height - padding}
+              stroke="#d6d9df"
+              strokeWidth="1"
             />
-          ))}
-        </svg>
+            <path d={areaPath} fill="url(#analytics-area-gradient)" />
+            <path
+              d={linePath}
+              fill="none"
+              stroke="#2563eb"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="3"
+            />
+            {coordinates.map((point) => {
+              const isHovered = hoveredPoint?.bucket_start === point.bucket_start
+              return (
+                <g key={`${point.bucket_start}-${point.index}`}>
+                  {isHovered && (
+                    <circle
+                      cx={point.x}
+                      cy={point.y}
+                      r="8"
+                      fill="#2563eb"
+                      fillOpacity="0.3"
+                    />
+                  )}
+                  <circle
+                    cx={point.x}
+                    cy={point.y}
+                    r="4"
+                    fill="#2563eb"
+                    stroke="#ffffff"
+                    strokeWidth="2"
+                  />
+                  <circle
+                    cx={point.x}
+                    cy={point.y}
+                    r="16"
+                    fill="transparent"
+                    className="cursor-pointer"
+                    onMouseEnter={(event) => {
+                      const svgRect = event.currentTarget.ownerSVGElement?.getBoundingClientRect()
+                      setHoveredPoint({
+                        bucket_start: point.bucket_start,
+                        value: point.value,
+                        cursor_x: svgRect ? event.clientX - svgRect.left : point.x,
+                        cursor_y: svgRect ? event.clientY - svgRect.top : point.y,
+                      })
+                    }}
+                    onMouseMove={(event) => {
+                      const svgRect = event.currentTarget.ownerSVGElement?.getBoundingClientRect()
+                      setHoveredPoint({
+                        bucket_start: point.bucket_start,
+                        value: point.value,
+                        cursor_x: svgRect ? event.clientX - svgRect.left : point.x,
+                        cursor_y: svgRect ? event.clientY - svgRect.top : point.y,
+                      })
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredPoint((current) =>
+                        current?.bucket_start === point.bucket_start ? null : current
+                      )
+                    }}
+                  />
+                </g>
+              )
+            })}
+          </svg>
+        </div>
       </div>
       <div className="grid gap-2 md:grid-cols-3">
         {referencePoints.map((point) => (
