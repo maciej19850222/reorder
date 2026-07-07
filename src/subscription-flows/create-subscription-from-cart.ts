@@ -64,8 +64,12 @@ export const createSubscriptionFromCartWorkflow = createWorkflow(
     })
 
     const validatedCart = validateSubscriptionCartStep(input)
+    // validatedCart MUST be an input of the transform below: the workflow DAG is
+    // built from data dependencies, and without it completeCartWorkflow runs
+    // concurrently with validation — a failed validation then leaves the cart
+    // completed and unusable (issue #4).
     const completedCart = completeCartWorkflow.runAsStep({
-      input: transform({ refreshedCart, input }, ({ input }) => ({
+      input: transform({ refreshedCart, validatedCart, input }, ({ input }) => ({
         id: input.cart_id,
       })),
     })
