@@ -1,4 +1,5 @@
 import { MedusaContainer } from "@medusajs/framework/types"
+import { Modules } from "@medusajs/framework/utils"
 import {
   listDueRenewalCyclesForProcessing,
   type DueRenewalCycleRecord,
@@ -14,6 +15,18 @@ import { processRenewalCycleWorkflow } from "../workflows"
 
 const JOB_NAME = "process-renewal-cycles"
 const DEFAULT_BATCH_SIZE = 20
+// Single-flight lock (symetrycznie do dunningu): gdy batch odnowien przekroczy 5 min,
+// nastepny cron NIE wystartuje na nakladce -> eliminuje okno TOCTOU i ryzyko
+// PODWOJNEGO OBCIAZENIA karty (najkosztowniejszy blad systemu).
+const JOB_LOCK_KEY = "jobs:renewal-cycles"
+
+type LockingService = {
+  execute<T>(
+    keys: string | string[],
+    job: () => Promise<T>,
+    args?: { timeout?: number; provider?: string }
+  ): Promise<T>
+}
 
 function getLogger(container: MedusaContainer) {
   return container.resolve("logger")
@@ -85,9 +98,7 @@ async function processCycle(
   }
 }
 
-export default async function processRenewalCyclesJob(
-  container: MedusaContainer
-) {
+async function runRenewalCyclesJob(container: MedusaContainer) {
   const logger = getLogger(container)
   const startedAt = Date.now()
   const batchSize = DEFAULT_BATCH_SIZE
@@ -210,6 +221,36 @@ export default async function processRenewalCyclesJob(
       alertable: true,
       failure_kind: "unexpected_error",
       message,
+    })
+  }
+}
+
+export default async function processRenewalCyclesJob(
+  container: MedusaContainer
+) {
+  const logger = getLogger(container)
+  const locking = container.resolve<LockingService>(Modules.LOCKING)
+  const jobCorrelationId = createRenewalCorrelationId(`${JOB_NAME}-lock`)
+
+  try {
+    await locking.execute(JOB_LOCK_KEY, () => runRenewalCyclesJob(container), {
+      timeout: 1,
+    })
+  } catch (error) {
+    const message = getRenewalErrorMessage(error)
+    const blocked = message.toLowerCase().includes("lock") ||
+      message.toLowerCase().includes("timeout")
+
+    logRenewalEvent(logger, blocked ? "warn" : "error", {
+      event: "renewal.job",
+      job_name: JOB_NAME,
+      outcome: blocked ? "blocked" : "failed",
+      correlation_id: jobCorrelationId,
+      alertable: !blocked,
+      failure_kind: blocked ? "already_processing" : "unexpected_error",
+      message: blocked
+        ? "Renewal scheduler skipped because another job instance holds the lock"
+        : message,
     })
   }
 }
